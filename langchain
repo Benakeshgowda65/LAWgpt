@@ -1,0 +1,335 @@
+# --- Imports ---
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain.prompts import PromptTemplate
+from langchain_together import Together
+from langchain.memory import ConversationBufferWindowMemory
+from langchain.chains import ConversationalRetrievalChain
+import streamlit as st
+import time
+import random	
+import os 
+
+llm = Together(
+    model="mistralai/Mistral-7B-Instruct-v0.2",
+    temperature=0.5,
+    max_tokens=1024,
+    together_api_key="97019b3b995257f2f56dfe8d5837ce98af9e6f68e8f906f80e9f580901801eb5"
+)
+
+
+# --- Streamlit Config ---
+st.set_page_config(page_title="LawGPT", layout="wide")
+
+# --- Session States ---
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+if "memory" not in st.session_state:
+    st.session_state.memory = ConversationBufferWindowMemory(k=2, memory_key="chat_history", return_messages=True)
+if "chat_sessions" not in st.session_state:
+    st.session_state.chat_sessions = {}
+if "session_id" not in st.session_state:
+    st.session_state.session_id = f"Chat-{len(st.session_state.chat_sessions)+1}"
+if "chat_name" not in st.session_state:
+    st.session_state.chat_name = "Legal Chat"
+if "show_resources" not in st.session_state:
+    st.session_state.show_resources = False
+if "show_exports" not in st.session_state:
+    st.session_state.show_exports = False
+
+# --- Apply Dark Theme + Button Styles ---
+st.markdown("""
+    <style>
+    body, .reportview-container, .main, .block-container {
+        background-color: #0f0f0f;
+        color: #ffffff;
+    }
+    .stTextInput input {
+        color: white;
+        font-weight: bold;
+    }
+    div.stButton > button:first-child {
+        background: linear-gradient(135deg, #ff4b2b, #ff416c);
+        border: none;
+        color: white;
+        font-weight: bold;
+        padding: 10px 24px;
+        border-radius: 10px;
+        transition: 0.3s;
+    }
+    div.stButton > button:first-child:hover {
+        background: linear-gradient(135deg, #ff6a00, #ee0979);
+        transform: scale(1.03);
+    }
+    .stChatMessage {
+        background-color: #1e1e1e;
+        border-radius: 12px;
+        padding: 10px;
+        margin-bottom: 8px;
+    }
+    .stStatusWidget > div > button {
+        display: none !important;
+    }
+    #MainMenu, .stDeployButton, footer, #stDecoration {
+        display: none;
+        visibility: hidden;
+    }
+    button[title="View fullscreen"] {
+        visibility: hidden;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# --- Legal Resources Sidebar ---
+if st.sidebar.button("🧾 Useful Legal Resources"):
+    st.session_state.show_resources = not st.session_state.show_resources
+
+if st.session_state.show_resources:
+    legal_links = {
+        "📜 India Code": {
+            "url": "https://www.indiacode.nic.in/",
+            "desc": "Central repository of all Indian laws, maintained by the Ministry of Law and Justice."
+        },
+        "⚖️ eCourts Services": {
+            "url": "https://ecourts.gov.in/",
+            "desc": "Check case status, court orders, and cause lists from district courts nationwide."
+        },
+        "🧑‍⚖️ Supreme Court of India": {
+            "url": "https://main.sci.gov.in/",
+            "desc": "Official portal of the apex court. Access judgments, daily orders, and cause lists."
+        },
+        "🏛️ High Courts of India": {
+            "url": "https://www.india.gov.in/my-government/judiciary/high-courts-india",
+            "desc": "Directory with links to all high courts across India."
+        },
+        "🛡️ Bar Council of India": {
+            "url": "http://www.barcouncilofindia.org/",
+            "desc": "Regulatory body overseeing the legal profession and education in India."
+        },
+        "📩 NALSA (Legal Aid)": {
+            "url": "https://nalsa.gov.in/",
+            "desc": "National Legal Services Authority offering free legal services and awareness initiatives."
+        },
+        "📘 Legislative Department": {
+            "url": "https://legislative.gov.in/",
+            "desc": "Publishes Central Acts, Ordinances, Bills, and legal drafts for public and parliamentary use."
+        },
+        "🏛️ Ministry of Law & Justice": {
+            "url": "https://lawmin.gov.in/",
+            "desc": "Government ministry responsible for law-making and justice delivery reforms."
+        },
+        "📊 NJDG (Judicial Data Grid)": {
+            "url": "https://njdg.ecourts.gov.in/njdgnew/index.php",
+            "desc": "National dashboard tracking pendency and disposal of cases across Indian courts."
+        },
+        "📰 Live Law": {
+            "url": "https://www.livelaw.in/",
+            "desc": "Legal news platform featuring court updates, landmark cases, and expert opinions."
+        },
+        "🔍 Indian Kanoon": {
+            "url": "https://indiankanoon.org/",
+            "desc": "Legal search engine for judgments, bare acts, and case laws from Indian courts."
+        }
+    }
+
+    selected_resource = st.sidebar.selectbox("📚 Browse Resources", ["-- Select --"] + list(legal_links.keys()))
+    if selected_resource and selected_resource != "-- Select --":
+        resource = legal_links[selected_resource]
+        st.sidebar.markdown(f"""
+        <div style='padding:10px; background-color:#f0f0f0; border-radius:10px;'>
+            <h4 style='margin-bottom:5px; color: black;'>{selected_resource}</h4>
+            <p style='margin-bottom:10px; font-size: 14px; color: #333333;'>{resource['desc']}</p>
+            <a href="{resource['url']}" target="_blank" style='color:#1f77b4; font-weight:bold;'>🌐 Visit Website</a>
+        </div>
+        """, unsafe_allow_html=True)
+
+from fpdf import FPDF
+
+import os
+from fpdf import FPDF
+
+# --- Export & Summary Sidebar Toggle ---
+if "show_exports" not in st.session_state:
+    st.session_state.show_exports = False
+
+if st.sidebar.button("📤 Exports & Summary"):
+    st.session_state.show_exports = not st.session_state.show_exports
+
+if st.session_state.show_exports:
+    export_option = st.sidebar.radio("Select Export Option", ["Chat Summary", "Download PDF"])
+
+    # --- Chat Summary Section ---
+    if export_option == "Chat Summary":
+        st.sidebar.write("- Generate a brief summary of the conversation")
+        if st.sidebar.button("📋 Generate Summary"):
+            conversation = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.get("messages", [])])
+
+            summary_prompt = f"""Summarize the following legal conversation in a concise manner, keeping only relevant legal insights:
+
+{conversation}
+
+Summary:"""
+
+            with st.sidebar:
+                with st.spinner("Generating summary..."):
+                    try:
+                        summary_result = llm.invoke(summary_prompt)
+                        st.success("Summary Generated!")
+                        st.sidebar.markdown(f"📌 **Chat Summary:**\n\n{summary_result}")
+                    except Exception as e:
+                        st.error("❌ Failed to generate summary.")
+                        st.exception(e)
+
+    # --- PDF Download Section ---
+    elif export_option == "Download PDF":
+        st.sidebar.write("- Download complete chat as PDF")
+        if st.sidebar.button("📄 Generate & Download PDF"):
+            conversation = "\n".join([f"{m['role'].capitalize()}: {m['content']}" for m in st.session_state.get("messages", [])])
+
+            output_dir = os.path.join(os.path.expanduser("~"), "LawGPT")
+            os.makedirs(output_dir, exist_ok=True)
+            pdf_path = os.path.join(output_dir, "chat_conversation.pdf")
+
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.add_page()
+            pdf.set_font("Arial", style="B", size=16)
+            pdf.cell(200, 10, txt="Chat Conversation", ln=True, align="C")
+            pdf.ln(10)
+            pdf.set_font("Arial", size=12)
+            pdf.multi_cell(0, 10, conversation)
+            pdf.output(pdf_path)
+
+            st.sidebar.success("✅ PDF saved to ~/LawGPT/chat_conversation.pdf")
+            with open(pdf_path, "rb") as f:
+                st.sidebar.download_button(
+                    label="⬇️ Click here to download",
+                    data=f,
+                    file_name="chat_conversation.pdf",
+                    mime="application/pdf"
+                )
+
+# --- Header ---
+st.markdown("""
+    <div style='text-align: center;'>
+        <img src='https://github.com/harshitv804/LawGPT/assets/100853494/ecff5d3c-f105-4ba2-a93a-500282f0bf00' style='width: 180px;'/>
+        <h1 style='color: #ff4b2b;'>LawGPT</h1>
+        <p style='font-size: 18px;'>Your AI Legal Assistant for Indian Penal Code Queries</p>
+    </div>
+""", unsafe_allow_html=True)
+
+# --- Reset Chat ---
+def reset_conversation():
+    st.session_state.messages = []
+    st.session_state.memory.clear()
+
+# --- Load DB & LLM ---
+embeddings = HuggingFaceEmbeddings(model_name="nomic-ai/nomic-embed-text-v1", model_kwargs={"trust_remote_code": True, "revision": "289f532e14dbbbd5a04753fa58739e9ba766f3c7"})
+db = FAISS.load_local("ipc_vector_db", embeddings, allow_dangerous_deserialization=True)
+db_retriever = db.as_retriever(search_type="similarity", search_kwargs={"k": 4})
+
+prompt_template = """<s>[INST]This is a chat template and As a legal chat bot specializing in Indian Penal Code queries, your primary objective is to provide accurate and concise info>
+CONTEXT: {context}
+CHAT HISTORY: {chat_history}
+QUESTION: {question}
+ANSWER:
+</s>[INST]"""
+prompt = PromptTemplate(template=prompt_template, input_variables=['context', 'question', 'chat_history'])
+
+llm = Together(
+    model="mistralai/Mistral-7B-Instruct-v0.2",
+    temperature=0.5,
+    max_tokens=1024,
+    together_api_key="97019b3b995257f2f56dfe8d5837ce98af9e6f68e8f906f80e9f580901801eb5"
+)
+
+qa = ConversationalRetrievalChain.from_llm(
+    llm=llm,
+    memory=st.session_state.memory,
+    retriever=db_retriever,
+    combine_docs_chain_kwargs={'prompt': prompt}
+)
+
+# --- Show Chat History ---
+for message in st.session_state.messages:
+    with st.chat_message(message.get("role")):
+        if message.get("role") == "assistant":
+            st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=40)
+        st.write(message.get("content"))
+
+# --- Suggestions ---
+suggestions_pool = [
+    "What is Section 302?",
+    "Explain IPC Section 420",
+    "Punishment for theft",
+    "What is bail under IPC?",
+    "Difference between murder and culpable homicide"
+]
+suggested = random.sample(suggestions_pool, 3)
+
+st.markdown("### 💡 Suggested Questions:")
+for item in suggested:
+    if st.button(item):
+        st.session_state.suggested_question = item
+        st.rerun()
+
+# --- Chat Input ---
+default_val = st.session_state.pop("suggested_question", "")
+input_prompt = st.chat_input("Ask your legal question here...") or default_val
+
+if input_prompt:
+    with st.chat_message("user"):
+        st.write(input_prompt)
+    st.session_state.messages.append({"role": "user", "content": input_prompt})
+
+    # Ensure to generate a response that only answers the question
+    with st.chat_message("assistant"):
+        st.image("https://cdn-icons-png.flaticon.com/512/4712/4712035.png", width=40)
+        with st.status("Thinking 💡...", expanded=True):
+            # Modify the input prompt to guide the model to answer only the specific question
+            modified_input_prompt = f"QUESTION: {input_prompt}\nANSWER ONLY THE QUESTION:"
+            
+            # Call the model with the modified prompt
+            result = qa.invoke(input=modified_input_prompt)
+            
+            # Initialize response construction
+            message_placeholder = st.empty()
+            full_response = "⚠️ **_Note: Information provided may be inaccurate._** \n\n\n"
+            
+            # Process the result and add only the answer to the response
+            clean_answer = result.get("answer", "").strip()  # Clean the answer to avoid unwanted extra text
+            
+            # Add the clean answer to the response
+            full_response += clean_answer
+            
+            # Show the answer in a typing simulation
+            for chunk in full_response:
+                message_placeholder.markdown(full_response + " ▌")
+                time.sleep(0.02)
+
+        # Display the final answer (without extra information)
+        st.session_state.messages.append({"role": "assistant", "content": clean_answer})
+
+    # Button to reset the conversation
+    st.button('🗑️ Reset All Chat', on_click=reset_conversation)
+
+# --- Sidebar Chat History ---
+st.sidebar.title("💬 Chat History")
+if st.sidebar.button("➕ New Chat"):
+    st.session_state.chat_sessions[st.session_state.session_id] = st.session_state.messages.copy()
+    st.session_state.messages = []
+    st.session_state.session_id = f"Chat-{len(st.session_state.chat_sessions)+1}"
+    st.session_state.chat_name = f"Legal Chat - {len(st.session_state.chat_sessions)+1}"
+
+if st.session_state.chat_sessions:
+    for key, msgs in st.session_state.chat_sessions.items():
+        if st.sidebar.button(key):
+            st.session_state.messages = msgs.copy()
+            st.session_state.session_id = key
+            st.session_state.chat_name = f"Legal Chat - {len(st.session_state.chat_sessions)+1}"
+            st.session_state.chat_sessions = {}
+
+
+
+
+this is app.py file
