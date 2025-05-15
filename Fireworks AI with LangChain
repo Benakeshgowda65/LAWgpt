@@ -1,0 +1,37 @@
+# --- Imports ---
+import os
+import getpass
+from langchain_fireworks import Fireworks, ChatFireworks, FireworksEmbeddings
+
+# --- Set Fireworks API Key ---
+if "FIREWORKS_API_KEY" not in os.environ:
+    os.environ["FIREWORKS_API_KEY"] = getpass.getpass("Enter your Fireworks API Key: ")
+
+# --- LLM: Text Completion Example ---
+llm = Fireworks(
+    model="accounts/fireworks/models/llama-v3p1-8b-instruct",
+    base_url="https://api.fireworks.ai/inference/v1/completions",
+)
+
+question_1 = "What is Section 302 of the Indian Penal Code?"
+response_1 = llm.invoke(question_1)
+print("📘 LLM Answer:\n", response_1)
+
+# --- Chat Model Example ---
+chat_model = ChatFireworks(
+    model="accounts/fireworks/models/llama-v3p1-8b-instruct",
+    base_url="https://api.fireworks.ai/inference/v1/chat/completions",
+)
+
+question_2 = "Explain the punishment under IPC Section 420."
+response_2 = chat_model.invoke(question_2)
+print("\n💬 Chat Model Response:\n", response_2)
+
+# --- Embeddings Example ---
+embed_model = FireworksEmbeddings(
+    model="nomic-ai/nomic-embed-text-v1.5",
+)
+
+text = "Indian Penal Code Section 375 deals with rape"
+vector = embed_model.embed_query(text)
+print("\n📊 Embedding Vector Sample:\n", vector[:5])  # show first 5 dimensions
